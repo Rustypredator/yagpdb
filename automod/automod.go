@@ -21,8 +21,12 @@ var (
 type Plugin struct {
 }
 
-func (p *Plugin) Name() string {
-	return "Automod v2"
+func (p *Plugin) PluginInfo() *common.PluginInfo {
+	return &common.PluginInfo{
+		Name:     "Automod v2",
+		SysName:  "automod_v2",
+		Category: common.PluginCategoryModeration,
+	}
 }
 
 func RegisterPlugin() {
@@ -152,8 +156,12 @@ func PrepareMessageForWordCheck(input string) string {
 		}
 
 		out.WriteString(w1)
-		if w1 != w2 {
+		if w1 != w2 && w1 != w {
+			out.WriteString(" " + w2 + " " + w)
+		} else if w1 != w2 {
 			out.WriteString(" " + w2)
+		} else if w1 != w {
+			out.WriteString(" " + w)
 		}
 	}
 

@@ -26,6 +26,8 @@ var (
 	started     bool
 
 	numWorkers = new(int32)
+
+	webhookSession *discordgo.Session
 )
 
 type PluginWithErrorHandler interface {
@@ -44,13 +46,23 @@ var (
 type Plugin struct {
 }
 
-func (p *Plugin) Name() string {
-	return "mqueue"
+func (p *Plugin) PluginInfo() *common.PluginInfo {
+	return &common.PluginInfo{
+		Name:     "mqueue",
+		SysName:  "mqueue",
+		Category: common.PluginCategoryCore,
+	}
 }
 
 func RegisterPlugin() {
 
-	_, err := common.PQ.Exec(DBSchema)
+	var err error
+	webhookSession, err = discordgo.New()
+	if err != nil {
+		logrus.WithError(err).Error("[mqueue] failed initiializing webhook session")
+	}
+
+	_, err = common.PQ.Exec(DBSchema)
 	if err != nil {
 		logrus.WithError(err).Error("[mqueue] failed initiializing db schema")
 	}
@@ -210,8 +222,8 @@ func startPolling() {
 				l := len(workSlice)
 				workmu.Unlock()
 
-				common.Statsd.Gauge("yagpdb.mqueue.size", float64(l), []string{"node:" + bot.NodeID()}, 1)
-				common.Statsd.Gauge("yagpdb.mqueue.numworkers", float64(atomic.LoadInt32(numWorkers)), []string{"node:" + bot.NodeID()}, 1)
+				common.Statsd.Gauge("yagpdb.mqueue.size", float64(l), nil, 1)
+				common.Statsd.Gauge("yagpdb.mqueue.numworkers", float64(atomic.LoadInt32(numWorkers)), nil, 1)
 			}
 		}
 	}
@@ -440,7 +452,7 @@ func trySendWebhook(l *logrus.Entry, elem *QueuedElement) (err error) {
 		webhookParams.Embeds = []*discordgo.MessageEmbed{elem.MessageEmbed}
 	}
 
-	err = common.BotSession.WebhookExecute(webhook.ID, webhook.Token, true, webhookParams)
+	err = webhookSession.WebhookExecute(webhook.ID, webhook.Token, true, webhookParams)
 	if code, _ := common.DiscordError(err); code == discordgo.ErrCodeUnknownWebhook {
 		// if the webhook was deleted, then delete the bad boi from the databse and retry
 		const query = `DELETE FROM mqueue_webhooks WHERE id=$1`

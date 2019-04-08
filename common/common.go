@@ -1,5 +1,7 @@
 package common
 
+//go:generate sqlboiler --no-hooks psql
+
 import (
 	"database/sql"
 	"fmt"
@@ -17,8 +19,8 @@ import (
 
 const (
 	VERSIONMAJOR = 1
-	VERSIONMINOR = 16
-	VERSIONPATCH = 2
+	VERSIONMINOR = 17
+	VERSIONPATCH = 1
 )
 
 var (
@@ -41,6 +43,9 @@ var (
 	Testing = os.Getenv("YAGPDB_TESTING") != ""
 
 	CurrentRunCounter int64
+
+	NodeID string
+	_      interface{} = ensure64bit
 )
 
 // Initalizes all database connections, config loading and so on
@@ -88,6 +93,10 @@ func Init() error {
 		panic(err)
 	}
 
+	if !InitSchema(CoreServerConfDBSchema, "core configs") {
+		logrus.Fatal("error initializing schema")
+	}
+
 	return err
 }
 
@@ -120,6 +129,10 @@ func ConnectDatadog() {
 	if err != nil {
 		logrus.WithError(err).Error("Failed connecting to dogstatsd, datadog integration disabled")
 		return
+	}
+
+	if NodeID != "" {
+		client.Tags = append(client.Tags, "node:"+NodeID)
 	}
 
 	Statsd = client
@@ -164,4 +177,14 @@ func connectDB(host, user, pass, dbName string) error {
 	GORM.SetLogger(&GORMLogger{})
 
 	return err
+}
+
+func InitSchema(schema string, name string) bool {
+	_, err := PQ.Exec(schema)
+	if err != nil {
+		logrus.WithError(err).Error("failed initializing postgres db schema for ", name)
+		return false
+	}
+
+	return true
 }
