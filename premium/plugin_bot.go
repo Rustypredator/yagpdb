@@ -1,11 +1,11 @@
 package premium
 
 import (
+	"time"
+
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/commands"
-	"github.com/sirupsen/logrus"
-	"time"
 )
 
 var _ bot.BotInitHandler = (*Plugin)(nil)
@@ -34,7 +34,7 @@ func (p *Plugin) MessageLimits(cs *dstate.ChannelState) (maxMessages int, maxMes
 
 	premium, err := IsGuildPremium(cs.Guild.ID)
 	if err != nil {
-		logrus.WithError(err).WithField("guild", cs.Guild.ID).Error("Failed checking if guild is premium")
+		logger.WithError(err).WithField("guild", cs.Guild.ID).Error("Failed checking if guild is premium")
 	}
 
 	if premium {

@@ -2,6 +2,13 @@ package templates
 
 import (
 	"bytes"
+	"io"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/template"
@@ -10,11 +17,6 @@ import (
 	"github.com/jonas747/yagpdb/common/scheduledevents2"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"io"
-	"net/url"
-	"regexp"
-	"strings"
-	"time"
 )
 
 var (
@@ -37,10 +39,14 @@ var (
 		"title":     strings.Title,
 
 		// math
-		"add":  add,
-		"mult": tmplMult,
-		"div":  tmplDiv,
-		"fdiv": tmplFDiv,
+		"add":        add,
+		"mult":       tmplMult,
+		"div":        tmplDiv,
+		"fdiv":       tmplFDiv,
+		"round":      tmplRound,
+		"roundCeil":  tmplRoundCeil,
+		"roundFloor": tmplRoundFloor,
+		"roundEven":  tmplRoundEven,
 
 		// misc
 		"dict":   Dictionary,
@@ -74,6 +80,8 @@ var (
 	}
 )
 
+var logger = common.GetFixedPrefixLogger("templates")
+
 func TODO() {}
 
 type ContextSetupFunc func(ctx *Context)
@@ -81,6 +89,9 @@ type ContextSetupFunc func(ctx *Context)
 func RegisterSetupFunc(f ContextSetupFunc) {
 	contextSetupFuncs = append(contextSetupFuncs, f)
 }
+
+// set by the premium package to return wether this guild is premium or not
+var GuildPremiumFunc func(guildID int64) (bool, error)
 
 type Context struct {
 	Name string
@@ -114,6 +125,8 @@ type Context struct {
 
 	secondsSlept int
 
+	IsPremium bool
+
 	RegexCache map[string]*regexp.Regexp
 }
 
@@ -128,6 +141,10 @@ func NewContext(gs *dstate.GuildState, cs *dstate.ChannelState, ms *dstate.Membe
 		ContextFuncs: make(map[string]interface{}),
 		Data:         make(map[string]interface{}),
 		Counters:     make(map[string]int),
+	}
+
+	if gs != nil && GuildPremiumFunc != nil {
+		ctx.IsPremium, _ = GuildPremiumFunc(gs.ID)
 	}
 
 	ctx.setupContextFuncs()
@@ -165,6 +182,7 @@ func (c *Context) setupBaseData() {
 	c.Data["TimeSecond"] = time.Second
 	c.Data["TimeMinute"] = time.Minute
 	c.Data["TimeHour"] = time.Hour
+	c.Data["IsPremium"] = c.IsPremium
 }
 
 func (c *Context) Parse(source string) (*template.Template, error) {
@@ -233,6 +251,28 @@ func (c *Context) Execute(source string) (string, error) {
 	return result, nil
 }
 
+func (c *Context) ExecuteAndSendWithErrors(source string, channelID int64) error {
+	out, err := c.Execute(source)
+
+	if utf8.RuneCountInString(out) > 2000 {
+		out = "Template output for " + c.Name + " was longer than 2k (contact an admin on the server...)"
+	}
+
+	// deal with the results
+	if err != nil {
+		logger.WithField("guild", c.GS.ID).WithError(err).Error("Error executing template: " + c.Name)
+		out += "\nAn error caused the execution of the custom command template to stop:\n"
+		out += "`" + common.EscapeSpecialMentions(err.Error()) + "`"
+	}
+
+	if strings.TrimSpace(out) != "" {
+		_, err := common.BotSession.ChannelMessageSend(channelID, out)
+		return err
+	}
+
+	return nil
+}
+
 // IncreaseCheckCallCounter Returns true if key is above the limit
 func (c *Context) IncreaseCheckCallCounter(key string, limit int) bool {
 	current, ok := c.Counters[key]
@@ -246,6 +286,23 @@ func (c *Context) IncreaseCheckCallCounter(key string, limit int) bool {
 	return current > limit
 }
 
+// IncreaseCheckCallCounter Returns true if key is above the limit
+func (c *Context) IncreaseCheckCallCounterPremium(key string, normalLimit, premiumLimit int) bool {
+	current, ok := c.Counters[key]
+	if !ok {
+		current = 0
+	}
+	current++
+
+	c.Counters[key] = current
+
+	if c.IsPremium {
+		return current > premiumLimit
+	}
+
+	return current > normalLimit
+}
+
 func (c *Context) IncreaseCheckGenericAPICall() bool {
 	return c.IncreaseCheckCallCounter("api_call", 100)
 }
@@ -255,7 +312,7 @@ func (c *Context) IncreaseCheckStateLock() bool {
 }
 
 func (c *Context) LogEntry() *logrus.Entry {
-	f := logrus.WithFields(logrus.Fields{
+	f := logger.WithFields(logrus.Fields{
 		"guild": c.GS.ID,
 		"name":  c.Name,
 	})
@@ -354,7 +411,7 @@ func MaybeScheduledDeleteMessage(guildID, channelID, messageID int64, delaySecon
 	if delaySeconds > 10 {
 		err := scheduledevents2.ScheduleDeleteMessages(guildID, channelID, time.Now().Add(time.Second*time.Duration(delaySeconds)), messageID)
 		if err != nil {
-			logrus.WithError(err).Error("failed scheduling message deletion")
+			logger.WithError(err).Error("failed scheduling message deletion")
 		}
 	} else {
 		go func() {

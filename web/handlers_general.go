@@ -4,17 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/jonas747/discordgo"
-	"github.com/jonas747/yagpdb/bot/botrest"
-	"github.com/jonas747/yagpdb/common"
-	"github.com/jonas747/yagpdb/common/models"
-	"github.com/jonas747/yagpdb/common/patreon"
-	"github.com/jonas747/yagpdb/web/discordblog"
-	"github.com/mediocregopher/radix"
-	"github.com/patrickmn/go-cache"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-	"goji.io/pat"
 	"html/template"
 	"io"
 	"net/http"
@@ -22,6 +11,17 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/jonas747/discordgo"
+	"github.com/jonas747/retryableredis"
+	"github.com/jonas747/yagpdb/bot/botrest"
+	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/common/models"
+	"github.com/jonas747/yagpdb/common/patreon"
+	"github.com/jonas747/yagpdb/web/discordblog"
+	"github.com/patrickmn/go-cache"
+	"github.com/pkg/errors"
+	"goji.io/pat"
 )
 
 type serverHomeWidget struct {
@@ -114,7 +114,7 @@ func HandleSelectServer(w http.ResponseWriter, r *http.Request) interface{} {
 	if joinedGuildParsed != 0 {
 		guild, err := common.BotSession.Guild(joinedGuildParsed)
 		if err != nil {
-			logrus.WithError(err).WithField("guild", r.FormValue("guild_id")).Error("Failed fetching guild")
+			CtxLogger(r.Context()).WithError(err).WithField("guild", r.FormValue("guild_id")).Error("Failed fetching guild")
 		} else {
 			tmpl["JoinedGuild"] = guild
 		}
@@ -138,7 +138,7 @@ func HandleLandingPage(w http.ResponseWriter, r *http.Request) (TemplateData, er
 	_, tmpl := GetCreateTemplateData(r.Context())
 
 	var joinedServers int
-	common.RedisPool.Do(radix.Cmd(&joinedServers, "SCARD", "connected_guilds"))
+	common.RedisPool.Do(retryableredis.Cmd(&joinedServers, "SCARD", "connected_guilds"))
 
 	tmpl["JoinedServers"] = joinedServers
 
@@ -167,7 +167,7 @@ func HandleReconnectShard(w http.ResponseWriter, r *http.Request) (TemplateData,
 
 	if user := ctx.Value(common.ContextKeyUser); user != nil {
 		cast := user.(*discordgo.User)
-		if cast.ID != common.Conf.Owner {
+		if cast.ID != int64(common.ConfOwner.GetInt()) {
 			return HandleStatus(w, r)
 		}
 	} else {
@@ -220,7 +220,7 @@ func pollCommandsRan() {
 
 		err := common.GORM.Table(common.LoggedExecutedCommand{}.TableName()).Select("COUNT(*)").Where("created_at > ?", within).Scan(&result).Error
 		if err != nil {
-			logrus.WithError(err).Error("failed counting commands ran today")
+			logger.WithError(err).Error("failed counting commands ran today")
 		} else {
 			atomic.StoreInt64(commandsRanToday, result.Count)
 		}

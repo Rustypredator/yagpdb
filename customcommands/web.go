@@ -3,21 +3,20 @@ package customcommands
 import (
 	"context"
 	"fmt"
+	"html/template"
+	"net/http"
+	"strconv"
+	"unicode/utf8"
+
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/pubsub"
 	"github.com/jonas747/yagpdb/customcommands/models"
 	"github.com/jonas747/yagpdb/web"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/sqlboiler/boil"
 	"github.com/volatiletech/sqlboiler/queries/qm"
 	"goji.io"
 	"goji.io/pat"
-	"html/template"
-	"net/http"
-	"os"
-	"strconv"
-	"unicode/utf8"
 )
 
 type GroupForm struct {
@@ -31,10 +30,6 @@ type GroupForm struct {
 }
 
 func (p *Plugin) InitWeb() {
-	if os.Getenv("YAGPDB_CC_DISABLE_REDIS_PQ_MIGRATION") == "" {
-		go migrateFromRedis()
-	}
-
 	tmplPathSettings := "templates/plugins/customcommands.html"
 	if common.Testing {
 		tmplPathSettings = "../../customcommands/assets/customcommands.html"
@@ -177,7 +172,7 @@ func HandleNewCommand(w http.ResponseWriter, r *http.Request) (web.TemplateData,
 		// create, update or remove the next run time and scheduled event
 		err = UpdateCommandNextRunTime(dbModel, true)
 		if err != nil {
-			logrus.WithError(err).WithField("guild", dbModel.GuildID).Error("failed updating next custom command run time")
+			web.CtxLogger(ctx).WithError(err).WithField("guild", dbModel.GuildID).Error("failed updating next custom command run time")
 		}
 	}
 
@@ -238,7 +233,7 @@ func HandleUpdateCommand(w http.ResponseWriter, r *http.Request) (web.TemplateDa
 	}
 
 	if err != nil {
-		logrus.WithError(err).WithField("guild", dbModel.GuildID).Error("failed updating next custom command run time")
+		web.CtxLogger(ctx).WithError(err).WithField("guild", dbModel.GuildID).Error("failed updating next custom command run time")
 	}
 
 	common.LogIgnoreError(pubsub.Publish("custom_commands_clear_cache", activeGuild.ID, nil), "failed creating pubsub cache eviction event", web.CtxLogger(ctx).Data)

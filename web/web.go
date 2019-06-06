@@ -3,25 +3,24 @@ package web
 import (
 	"crypto/tls"
 	"flag"
+	"html/template"
+	"net/http"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/NYTimes/gziphandler"
 	"github.com/golang/crypto/acme/autocert"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/yagpdb/bot/botrest"
 	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/common/config"
 	"github.com/jonas747/yagpdb/common/patreon"
 	yagtmpl "github.com/jonas747/yagpdb/common/templates"
 	"github.com/jonas747/yagpdb/web/discordblog"
 	"github.com/natefinch/lumberjack"
-	log "github.com/sirupsen/logrus"
 	"goji.io"
 	"goji.io/pat"
-	"html/template"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
 )
 
 var (
@@ -50,6 +49,18 @@ var (
 	StartedAt = time.Now()
 
 	CurrentAd *Advertisement
+
+	logger = common.GetFixedPrefixLogger("web")
+
+	confAnnouncementsChannel = config.RegisterOption("yagpdb.announcements_channel", "Channel to pull announcements from and display on the control panel homepage", 0)
+
+	confAdPath    = config.RegisterOption("yagpdb.ad.img_path", "The ad image ", "")
+	confAdLinkurl = config.RegisterOption("yagpdb.ad.link", "Link to follow when clicking on the ad", "")
+	confAdWidth   = config.RegisterOption("yagpdb.ad.w", "Ad width", 0)
+	confAdHeight  = config.RegisterOption("yagpdb.ad.h", "Ad Height", 0)
+	ConfAdVideos  = config.RegisterOption("yagpdb.ad.video_paths", "Comma seperated list of video paths in different formats", "")
+
+	confDisableRequestLogging = config.RegisterOption("yagpdb.disable_request_logging", "Disable logging of http requests to web server", false)
 )
 
 type Advertisement struct {
@@ -98,10 +109,10 @@ func loadTemplates() {
 
 func BaseURL() string {
 	if https || exthttps {
-		return "https://" + common.Conf.Host
+		return "https://" + common.ConfHost.GetString()
 	}
 
-	return "http://" + common.Conf.Host
+	return "http://" + common.ConfHost.GetString()
 }
 
 func Run() {
@@ -109,8 +120,8 @@ func Run() {
 
 	loadTemplates()
 
-	AddGlobalTemplateData("ClientID", common.Conf.ClientID)
-	AddGlobalTemplateData("Host", common.Conf.Host)
+	AddGlobalTemplateData("ClientID", common.ConfClientID.GetString())
+	AddGlobalTemplateData("Host", common.ConfHost.GetString())
 	AddGlobalTemplateData("Version", common.VERSION)
 	AddGlobalTemplateData("Testing", common.Testing)
 
@@ -128,32 +139,29 @@ func Run() {
 	go botrest.RunPinger()
 	go pollCommandsRan()
 
-	blogChannel := os.Getenv("YAGPDB_ANNOUNCEMENTS_CHANNEL")
-	parsedBlogChannel, _ := strconv.ParseInt(blogChannel, 10, 64)
-	if parsedBlogChannel != 0 {
-		go discordblog.RunPoller(common.BotSession, parsedBlogChannel, time.Minute)
+	blogChannel := confAnnouncementsChannel.GetInt()
+	if blogChannel != 0 {
+		go discordblog.RunPoller(common.BotSession, int64(blogChannel), time.Minute)
 	}
 
 	LoadAd()
 
-	log.Info("Running webservers")
+	logger.Info("Running webservers")
 	runServers(mux)
 }
 
 func LoadAd() {
-	path := os.Getenv("YAGPDB_AD_IMG_PATH")
-	linkurl := os.Getenv("YAGPDB_AD_LINK")
-	width, _ := strconv.Atoi(os.Getenv("YAGPDB_AD_W"))
-	height, _ := strconv.Atoi(os.Getenv("YAGPDB_AD_H"))
+	path := confAdPath.GetString()
+	linkurl := confAdLinkurl.GetString()
 
 	CurrentAd = &Advertisement{
 		Path:    template.URL(path),
 		LinkURL: template.URL(linkurl),
-		Width:   width,
-		Height:  height,
+		Width:   confAdWidth.GetInt(),
+		Height:  confAdHeight.GetInt(),
 	}
 
-	videos := strings.Split(os.Getenv("YAGPDB_AD_VIDEO_PATHS"), ",")
+	videos := strings.Split(ConfAdVideos.GetString(), ",")
 	for _, v := range videos {
 		if v == "" {
 			continue
@@ -180,7 +188,7 @@ func IsAcceptingRequests() bool {
 
 func runServers(mainMuxer *goji.Mux) {
 	if !https {
-		log.Info("Starting yagpdb web server http:", ListenAddressHTTP)
+		logger.Info("Starting yagpdb web server http:", ListenAddressHTTP)
 
 		server := &http.Server{
 			Addr:        ListenAddressHTTP,
@@ -190,17 +198,17 @@ func runServers(mainMuxer *goji.Mux) {
 
 		err := server.ListenAndServe()
 		if err != nil {
-			log.Error("Failed http ListenAndServe:", err)
+			logger.Error("Failed http ListenAndServe:", err)
 		}
 	} else {
-		log.Info("Starting yagpdb web server http:", ListenAddressHTTP, ", and https:", ListenAddressHTTPS)
+		logger.Info("Starting yagpdb web server http:", ListenAddressHTTP, ", and https:", ListenAddressHTTPS)
 
 		cache := autocert.DirCache("cert")
 
 		certManager := autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(common.Conf.Host, "www."+common.Conf.Host),
-			Email:      common.Conf.Email,
+			HostPolicy: autocert.HostWhitelist(common.ConfHost.GetString(), "www."+common.ConfHost.GetString()),
+			Email:      common.ConfEmail.GetString(),
 			Cache:      cache,
 		}
 
@@ -214,7 +222,7 @@ func runServers(mainMuxer *goji.Mux) {
 
 			err := unsafeHandler.ListenAndServe()
 			if err != nil {
-				log.Error("Failed http ListenAndServe:", err)
+				logger.Error("Failed http ListenAndServe:", err)
 			}
 		}()
 
@@ -229,7 +237,7 @@ func runServers(mainMuxer *goji.Mux) {
 
 		err := tlsServer.ListenAndServeTLS("", "")
 		if err != nil {
-			log.Error("Failed https ListenAndServeTLS:", err)
+			logger.Error("Failed https ListenAndServeTLS:", err)
 		}
 	}
 }
@@ -246,8 +254,8 @@ func setupRoutes() *goji.Mux {
 	serverPublicMux.Use(LoadCoreConfigMiddleware)
 	serverPublicMux.Use(SetGuildMemberMiddleware)
 
-	RootMux.Handle(pat.Get("/public/:server"), serverPublicMux)
-	RootMux.Handle(pat.Get("/public/:server/*"), serverPublicMux)
+	RootMux.Handle(pat.New("/public/:server"), serverPublicMux)
+	RootMux.Handle(pat.New("/public/:server/*"), serverPublicMux)
 	ServerPublicMux = serverPublicMux
 
 	// same as above but for API stuff
@@ -315,7 +323,7 @@ func setupRoutes() *goji.Mux {
 	for _, plugin := range common.Plugins {
 		if webPlugin, ok := plugin.(Plugin); ok {
 			webPlugin.InitWeb()
-			log.Info("Initialized web plugin:", plugin.PluginInfo().Name)
+			logger.Info("Initialized web plugin:", plugin.PluginInfo().Name)
 		}
 	}
 
@@ -326,7 +334,7 @@ func setupRootMux() {
 	mux := goji.NewMux()
 	RootMux = mux
 
-	if os.Getenv("YAGPDB_DISABLE_REQUEST_LOGGING") == "" {
+	if confDisableRequestLogging.GetBool() {
 		requestLogger := &lumberjack.Logger{
 			Filename: "access.log",
 			MaxSize:  10,
@@ -362,7 +370,7 @@ func AddGlobalTemplateData(key string, data interface{}) {
 }
 
 func legacyCPRedirHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Hit cp path: ", r.RequestURI)
+	logger.Println("Hit cp path: ", r.RequestURI)
 	trimmed := strings.TrimPrefix(r.RequestURI, "/cp")
 	http.Redirect(w, r, "/manage"+trimmed, http.StatusMovedPermanently)
 }
@@ -374,4 +382,22 @@ func LoadHTMLTemplate(pathTesting, pathProd string) {
 	}
 
 	Templates = template.Must(Templates.ParseFiles(path))
+}
+
+const (
+	SidebarCategoryTopLevel = "Top"
+	SidebarCategoryFeeds    = "Feeds"
+	SidebarCategoryTools    = "Tools"
+	SidebarCategoryFun      = "Fun"
+)
+
+type SidebarItem struct {
+	Name string
+	URL  string
+}
+
+var sideBarItems = make(map[string][]*SidebarItem)
+
+func AddSidebarItem(category string, sItem *SidebarItem) {
+	sideBarItems[category] = append(sideBarItems[category], sItem)
 }

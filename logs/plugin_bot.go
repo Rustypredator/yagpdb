@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
+
 	"github.com/jonas747/dcmd"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
@@ -12,11 +14,8 @@ import (
 	"github.com/jonas747/yagpdb/commands"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/logs/models"
-	// "github.com/lib/pq"
-	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/null"
 	"github.com/volatiletech/sqlboiler/boil"
-	"time"
 )
 
 var (
@@ -32,11 +31,11 @@ func (p *Plugin) AddCommands() {
 }
 
 func (p *Plugin) BotInit() {
-	eventsystem.AddHandler(bot.ConcurrentEventHandler(HandleQueueEvt), eventsystem.EventGuildMemberUpdate, eventsystem.EventGuildMemberAdd, eventsystem.EventMemberFetched)
-	eventsystem.AddHandler(bot.ConcurrentEventHandler(HandleGC), eventsystem.EventGuildCreate)
-	eventsystem.AddHandler(bot.ConcurrentEventHandler(HandleMsgDelete), eventsystem.EventMessageDelete, eventsystem.EventMessageDeleteBulk)
+	eventsystem.AddHandlerAsyncLast(bot.ConcurrentEventHandler(HandleQueueEvt), eventsystem.EventGuildMemberUpdate, eventsystem.EventGuildMemberAdd, eventsystem.EventMemberFetched)
+	eventsystem.AddHandlerAsyncLast(bot.ConcurrentEventHandler(HandleGC), eventsystem.EventGuildCreate)
+	eventsystem.AddHandlerAsyncLast(bot.ConcurrentEventHandler(HandleMsgDelete), eventsystem.EventMessageDelete, eventsystem.EventMessageDeleteBulk)
 
-	eventsystem.AddHandlerBefore(HandlePresenceUpdate, eventsystem.EventPresenceUpdate, bot.StateHandlerPtr)
+	eventsystem.AddHandlerFirst(HandlePresenceUpdate, eventsystem.EventPresenceUpdate)
 
 	var err error
 	nicknameQueryStatement, err = common.PQ.Prepare("select nickname from nickname_listings where user_id=$1 AND guild_id=$2 order by id desc limit 1;")
@@ -309,7 +308,7 @@ func HandleMsgDelete(evt *eventsystem.EventData) {
 	if evt.Type == eventsystem.EventMessageDelete {
 		err := markLoggedMessageAsDeleted(evt.Context(), evt.MessageDelete().ID)
 		if err != nil {
-			logrus.WithError(err).Error("Failed marking message as deleted")
+			logger.WithError(err).Error("Failed marking message as deleted")
 		}
 		return
 	}
@@ -317,7 +316,7 @@ func HandleMsgDelete(evt *eventsystem.EventData) {
 	for _, m := range evt.MessageDeleteBulk().Messages {
 		err := markLoggedMessageAsDeleted(evt.Context(), m)
 		if err != nil {
-			logrus.WithError(err).Error("Failed marking message as deleted")
+			logger.WithError(err).Error("Failed marking message as deleted")
 		}
 	}
 }
@@ -395,7 +394,7 @@ func CheckUsername(exec boil.ContextExecutor, ctx context.Context, usernameStmt 
 		return
 	}
 
-	logrus.Debug("[logs] User changed username, old:", lastUsername, " | new:", user.Username)
+	logger.Debug("User changed username, old:", lastUsername, " | new:", user.Username)
 
 	listing := &models.UsernameListing{
 		UserID:   null.Int64From(user.ID),
@@ -404,7 +403,7 @@ func CheckUsername(exec boil.ContextExecutor, ctx context.Context, usernameStmt 
 
 	err = listing.Insert(ctx, exec, boil.Infer())
 	if err != nil {
-		logrus.WithError(err).WithField("user", user.ID).Error("[logs] failed setting last username")
+		logger.WithError(err).WithField("user", user.ID).Error("failed setting last username")
 	}
 }
 
@@ -422,7 +421,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 		return
 	}
 
-	logrus.Debug("[logs] User changed nickname, old:", lastNickname, " | new:", nickname)
+	logger.Debug("User changed nickname, old:", lastNickname, " | new:", nickname)
 
 	listing := &models.NicknameListing{
 		UserID:   null.Int64From(userID),
@@ -432,7 +431,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 
 	err = listing.Insert(ctx, exec, boil.Infer())
 	if err != nil {
-		logrus.WithError(err).WithField("guild", guildID).WithField("user", userID).Error("[logs] failed setting last nickname")
+		logger.WithError(err).WithField("guild", guildID).WithField("user", userID).Error("failed setting last nickname")
 	}
 }
 
@@ -446,7 +445,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 	rows, err := gDB.CommonDB().Query(
 // 		"select distinct on(user_id) nickname,user_id from nickname_listings where user_id = ANY ($1) AND guild_id=$2 order by user_id,id desc;", pq.Int64Array(ids), guildID)
 // 	if err != nil {
-// 		logrus.WithError(err).Error("Failed querying current nicknames")
+// 		logger.WithError(err).Error("Failed querying current nicknames")
 // 	}
 
 // 	// Value is wether the nickname was identical
@@ -457,7 +456,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 		var userID int64
 // 		err = rows.Scan(&nickname, &userID)
 // 		if err != nil {
-// 			logrus.WithError(err).Error("Error while scanning")
+// 			logger.WithError(err).Error("Error while scanning")
 // 			continue
 // 		}
 
@@ -468,7 +467,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 					queriedUsers[userID] = true
 // 				} else {
 // 					queriedUsers[userID] = false
-// 					logrus.Debug("CHANGED Nick: ", nickname, " : ", member.Nick)
+// 					logger.Debug("CHANGED Nick: ", nickname, " : ", member.Nick)
 // 				}
 
 // 				break
@@ -488,7 +487,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 			continue
 // 		}
 
-// 		logrus.Debug("User changed nickname, new: ", member.Nick)
+// 		logger.Debug("User changed nickname, new: ", member.Nick)
 
 // 		listing := NicknameListing{
 // 			UserID:   member.User.ID,
@@ -498,7 +497,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 
 // 		err = gDB.Create(&listing).Error
 // 		if err != nil {
-// 			logrus.WithError(err).Error("Failed setting nickname")
+// 			logger.WithError(err).Error("Failed setting nickname")
 // 		}
 // 	}
 
@@ -513,7 +512,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 	rows, err := gDB.CommonDB().Query(
 // 		"select distinct on(user_id) username,user_id from username_listings where user_id = ANY ($1) order by user_id,id desc;", pq.Int64Array(ids))
 // 	if err != nil {
-// 		logrus.WithError(err).Error("Failed querying current usernames")
+// 		logger.WithError(err).Error("Failed querying current usernames")
 // 	}
 
 // 	unchangedUsers := make(map[int64]bool)
@@ -523,7 +522,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 		var userID int64
 // 		err = rows.Scan(&username, &userID)
 // 		if err != nil {
-// 			logrus.WithError(err).Error("Error while scanning")
+// 			logger.WithError(err).Error("Error while scanning")
 // 			continue
 // 		}
 
@@ -546,7 +545,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 // 			continue
 // 		}
 
-// 		logrus.Debug("User changed username, new: ", user.Username)
+// 		logger.Debug("User changed username, new: ", user.Username)
 
 // 		listing := UsernameListing{
 // 			UserID:   user.ID,
@@ -555,7 +554,7 @@ func CheckNickname(exec boil.ContextExecutor, ctx context.Context, nicknameStmt 
 
 // 		err = gDB.Create(&listing).Error
 // 		if err != nil {
-// 			logrus.WithError(err).Error("Failed setting username")
+// 			logger.WithError(err).Error("Failed setting username")
 // 		}
 // 	}
 // }
@@ -570,13 +569,22 @@ func EvtProcesser() {
 	for {
 		e := <-evtChan
 
+		guildIDProvider, ok := e.(discordgo.GuildEvent)
+		if !ok {
+			logger.Error("Not a guildID provider: ", e)
+			return
+		}
+
+		gID := guildIDProvider.GetGuildID()
+
+		conf, err := GetConfigCached(gID)
+		if err != nil {
+			logger.WithError(err).WithField("guild", gID).Error("Failed fetching config")
+			continue
+		}
+
 		switch t := e.(type) {
 		case *discordgo.PresenceUpdate:
-			conf, err := GetConfig(context.Background(), t.GuildID)
-			if err != nil {
-				logrus.WithError(err).Error("Failed fetching config")
-				continue
-			}
 
 			if conf.NicknameLoggingEnabled.Bool {
 				CheckNickname(common.PQ, context.Background(), nicknameQueryStatement, t.User.ID, t.GuildID, t.Presence.Nick)
@@ -588,29 +596,16 @@ func EvtProcesser() {
 				}
 			}
 		case *discordgo.GuildMemberUpdate:
-			conf, err := GetConfig(context.Background(), t.GuildID)
-			if err != nil {
-				logrus.WithError(err).Error("Failed fetching config")
-				continue
-			}
+
 			if conf.NicknameLoggingEnabled.Bool {
 				CheckNickname(common.PQ, context.Background(), nicknameQueryStatement, t.User.ID, t.GuildID, t.Nick)
 			}
 		case *discordgo.GuildMemberAdd:
-			conf, err := GetConfig(context.Background(), t.GuildID)
-			if err != nil {
-				logrus.WithError(err).Error("Failed fetching config")
-				continue
-			}
+
 			if conf.UsernameLoggingEnabled.Bool {
 				CheckUsername(common.PQ, context.Background(), usernameQueryStatement, t.User)
 			}
 		case *discordgo.Member:
-			conf, err := GetConfig(context.Background(), t.GuildID)
-			if err != nil {
-				logrus.WithError(err).Error("Failed fetching config")
-				continue
-			}
 
 			if conf.NicknameLoggingEnabled.Bool {
 				CheckNickname(common.PQ, context.Background(), nicknameQueryStatement, t.User.ID, t.GuildID, t.Nick)
@@ -636,7 +631,7 @@ func EvtProcesserGCs() {
 
 		// conf, err := GetConfig(gc.GuildID)
 		// if err != nil {
-		// 	logrus.WithError(err).Error("Failed fetching config")
+		// 	logger.WithError(err).Error("Failed fetching config")
 		// 	continue
 		// }
 
@@ -657,16 +652,36 @@ func EvtProcesserGCs() {
 
 		// err = tx.Commit().Error
 		// if err != nil {
-		// 	logrus.WithError(err).Error("Failed committing transaction")
+		// 	logger.WithError(err).Error("Failed committing transaction")
 		// 	continue
 		// }
 
 		// if len(gc.Members) > 100 {
-		// 	logrus.Infof("Checked %d members in %s", len(gc.Members), time.Since(started).String())
+		// 	logger.Infof("Checked %d members in %s", len(gc.Members), time.Since(started).String())
 		// 	// Make sure this dosen't use all our resources
 		// 	time.Sleep(time.Second * 25)
 		// } else {
 		// 	time.Sleep(time.Second * 15)
 		// }
 	}
+}
+
+const CacheKeyConfig bot.GSCacheKey = "logs_config"
+
+func GetConfigCached(gID int64) (*models.GuildLoggingConfig, error) {
+	gs := bot.State.Guild(true, gID)
+	if gs == nil {
+		return nil, bot.ErrGuildNotFound
+	}
+
+	v, err := gs.UserCacheFetch(true, CacheKeyConfig, func() (interface{}, error) {
+		conf, err := GetConfig(context.Background(), gID)
+		return conf, err
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return v.(*models.GuildLoggingConfig), nil
 }

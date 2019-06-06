@@ -2,15 +2,17 @@ package templates
 
 import (
 	"encoding/json"
-	"github.com/jonas747/discordgo"
-	"github.com/jonas747/dutil"
-	"github.com/jonas747/yagpdb/common"
-	"github.com/pkg/errors"
+	"math"
 	"math/rand"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jonas747/discordgo"
+	"github.com/jonas747/dutil"
+	"github.com/jonas747/yagpdb/common"
+	"github.com/pkg/errors"
 )
 
 // dictionary creates a map[string]interface{} from the given parameters by
@@ -288,6 +290,34 @@ func randInt(args ...interface{}) int {
 
 	r := rand.Int63n(max - min)
 	return int(r + min)
+}
+
+func tmplRound(args ...interface{}) float64 {
+	if len(args) < 1 {
+		return 0
+	}
+	return math.Round(ToFloat64(args[0]))
+}
+
+func tmplRoundCeil(args ...interface{}) float64 {
+	if len(args) < 1 {
+		return 0
+	}
+	return math.Ceil(ToFloat64(args[0]))
+}
+
+func tmplRoundFloor(args ...interface{}) float64 {
+	if len(args) < 1 {
+		return 0
+	}
+	return math.Floor(ToFloat64(args[0]))
+}
+
+func tmplRoundEven(args ...interface{}) float64 {
+	if len(args) < 1 {
+		return 0
+	}
+	return math.RoundToEven(ToFloat64(args[0]))
 }
 
 func joinStrings(sep string, args ...interface{}) string {

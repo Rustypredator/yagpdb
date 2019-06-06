@@ -2,8 +2,6 @@ package moderation
 
 import (
 	"fmt"
-	"github.com/jonas747/dstate"
-	"github.com/jonas747/yagpdb/common/scheduledevents2"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,9 +10,11 @@ import (
 	"github.com/jinzhu/gorm"
 	"github.com/jonas747/dcmd"
 	"github.com/jonas747/discordgo"
+	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/commands"
 	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/common/scheduledevents2"
 	"github.com/pkg/errors"
 )
 
@@ -35,7 +35,7 @@ func MBaseCmd(cmdData *dcmd.Data, targetID int64) (config *Config, targetUser *d
 			gs.RUnlock()
 
 			if !above {
-				return config, targetMember.DGoUser(), commands.NewPublicError("Can't use moderation commands on users ranked higher than you")
+				return config, targetMember.DGoUser(), commands.NewPublicError("Can't use moderation commands on users ranked the same or higher than you")
 			}
 
 			return config, targetMember.DGoUser(), nil
@@ -423,7 +423,7 @@ var ModerationCommands = []*commands.YAGCommand{
 				return nil, err
 			}
 
-			if msg.Author.ID != common.Conf.BotID {
+			if msg.Author.ID != common.BotUser.ID {
 				return "I didn't make that message", nil
 			}
 

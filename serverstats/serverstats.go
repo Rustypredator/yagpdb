@@ -5,18 +5,19 @@ package serverstats
 import (
 	"context"
 	"database/sql"
-	"github.com/jonas747/discordgo"
-	"github.com/jonas747/yagpdb/bot/botrest"
-	"github.com/jonas747/yagpdb/common"
-	"github.com/jonas747/yagpdb/serverstats/models"
-	"github.com/mediocregopher/radix"
-	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
-	"github.com/volatiletech/sqlboiler/queries/qm"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jonas747/discordgo"
+	"github.com/jonas747/retryableredis"
+	"github.com/jonas747/yagpdb/bot/botrest"
+	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/serverstats/models"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/volatiletech/sqlboiler/queries/qm"
 )
 
 type Plugin struct {
@@ -31,13 +32,10 @@ func (p *Plugin) PluginInfo() *common.PluginInfo {
 	}
 }
 
+var logger = common.GetPluginLogger(&Plugin{})
+
 func RegisterPlugin() {
-	common.ValidateSQLSchema(DBSchema)
-	_, err := common.PQ.Exec(DBSchema)
-	if err != nil {
-		log.WithError(err).Error("serverstats: failed initializing db schema, serverstats will be disabled")
-		return
-	}
+	common.InitSchema(DBSchema, "serverstats")
 
 	plugin := &Plugin{
 		stopStatsLoop: make(chan *sync.WaitGroup),
@@ -121,7 +119,7 @@ func RetrieveRedisStats(guildID int64) (*DailyStats, error) {
 
 	var messageStatsRaw []string
 
-	err := common.RedisPool.Do(radix.Cmd(&messageStatsRaw, "ZRANGEBYSCORE", RedisKeyChannelMessages(guildID), unixYesterday, "+inf"))
+	err := common.RedisPool.Do(retryableredis.Cmd(&messageStatsRaw, "ZRANGEBYSCORE", RedisKeyChannelMessages(guildID), unixYesterday, "+inf"))
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +127,7 @@ func RetrieveRedisStats(guildID int64) (*DailyStats, error) {
 	online, err := botrest.GetOnlineCount(guildID)
 	if err != nil {
 		if botrest.BotIsRunning() {
-			log.WithError(err).Error("Failed fetching online count")
+			logger.WithError(err).Error("Failed fetching online count")
 		}
 	}
 
@@ -153,7 +151,7 @@ func parseMessageStats(raw []string, guildID int64) (map[string]*ChannelStats, e
 		split := strings.Split(result, ":")
 		if len(split) < 2 {
 
-			log.WithFields(log.Fields{
+			logger.WithFields(logrus.Fields{
 				"guild":  guildID,
 				"result": result,
 			}).Error("Invalid message stats")

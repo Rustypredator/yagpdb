@@ -3,18 +3,21 @@ package commands
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/jonas747/dcmd"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
+	"github.com/jonas747/retryableredis"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/commands/models"
 	"github.com/jonas747/yagpdb/common"
-	"github.com/mediocregopher/radix"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/sqlboiler/queries/qm"
-	"strings"
-	"time"
 )
 
 type ContextKey int
@@ -61,7 +64,19 @@ var (
 	RKeyCommandLock     = func(uID int64, cmd string) string { return "cmd_lock:" + discordgo.StrID(uID) + ":" + cmd }
 
 	CommandExecTimeout = time.Minute
+
+	runningCommands     = make([]*RunningCommand, 0)
+	runningcommandsLock sync.Mutex
+	shuttingDown        = new(int32)
 )
+
+type RunningCommand struct {
+	GuildID   int64
+	ChannelID int64
+	AuthorID  int64
+
+	Command *YAGCommand
+}
 
 // Slight extension to the simplecommand, it will check if the command is enabled in the HandleCommand func
 // And invoke a custom handlerfunc with provided redis client
@@ -315,7 +330,7 @@ func (yc *YAGCommand) checkCanExecuteCommand(data *dcmd.Data, cState *dstate.Cha
 		}
 
 		if !settings.Enabled {
-			resp = fmt.Sprintf("The %q command is currently disabled on this server or channel. *(Control panel to enable/disable <https://%s>)*", yc.Name, common.Conf.Host)
+			resp = fmt.Sprintf("The %q command is currently disabled on this server or channel. *(Control panel to enable/disable <https://%s>)*", yc.Name, common.ConfHost.GetString())
 			return
 		}
 
@@ -375,7 +390,7 @@ func (yc *YAGCommand) checkCanExecuteCommand(data *dcmd.Data, cState *dstate.Cha
 	cdLeft, err := yc.CooldownLeft(data.Msg.Author.ID)
 	if err != nil {
 		// Just pretend the cooldown is off...
-		log.WithError(err).WithField("author", data.Msg.Author.ID).Error("Failed checking command cooldown")
+		logger.WithError(err).WithField("author", data.Msg.Author.ID).Error("Failed checking command cooldown")
 	}
 
 	if cdLeft > 0 {
@@ -401,7 +416,7 @@ func (yc *YAGCommand) humanizedRequiredPerms() string {
 }
 
 func (cs *YAGCommand) logExecutionTime(dur time.Duration, raw string, sender string) {
-	log.Infof("Handled Command [%4dms] %s: %s", int(dur.Seconds()*1000), sender, raw)
+	logger.Infof("Handled Command [%4dms] %s: %s", int(dur.Seconds()*1000), sender, raw)
 }
 
 func (cs *YAGCommand) deleteResponse(msgs []*discordgo.Message) {
@@ -438,7 +453,7 @@ func (cs *YAGCommand) customEnabled(guildID int64) (bool, error) {
 
 	// Check redis for settings
 	var enabled bool
-	err := common.RedisPool.Do(radix.Cmd(&enabled, "GET", cs.Key+discordgo.StrID(guildID)))
+	err := common.RedisPool.Do(retryableredis.Cmd(&enabled, "GET", cs.Key+discordgo.StrID(guildID)))
 	if err != nil {
 		return false, err
 	}
@@ -583,7 +598,7 @@ func (cs *YAGCommand) CooldownLeft(userID int64) (int, error) {
 	}
 
 	var ttl int
-	err := common.RedisPool.Do(radix.Cmd(&ttl, "TTL", RKeyCommandCooldown(userID, cs.Name)))
+	err := common.RedisPool.Do(retryableredis.Cmd(&ttl, "TTL", RKeyCommandCooldown(userID, cs.Name)))
 	if ttl < 1 {
 		return 0, nil
 	}
@@ -598,12 +613,12 @@ func (cs *YAGCommand) SetCooldown(userID int64) error {
 	}
 	now := time.Now().Unix()
 
-	err := common.RedisPool.Do(radix.FlatCmd(nil, "SET", RKeyCommandCooldown(userID, cs.Name), now, "EX", cs.Cooldown))
+	err := common.RedisPool.Do(retryableredis.FlatCmd(nil, "SET", RKeyCommandCooldown(userID, cs.Name), now, "EX", cs.Cooldown))
 	return err
 }
 
-func (yc *YAGCommand) Logger(data *dcmd.Data) *log.Entry {
-	l := log.WithField("cmd", yc.Name)
+func (yc *YAGCommand) Logger(data *dcmd.Data) *logrus.Entry {
+	l := logger.WithField("cmd", yc.Name)
 	if data != nil {
 		if data.Msg != nil {
 			l = l.WithField("user_n", data.Msg.Author.Username)
@@ -628,7 +643,7 @@ func (yc *YAGCommand) GetTrigger() *dcmd.Trigger {
 func CensorError(err error) string {
 	toCensor := []string{
 		common.BotSession.Token,
-		common.Conf.ClientSecret,
+		common.ConfClientSecret.GetString(),
 	}
 
 	out := err.Error()
@@ -637,4 +652,64 @@ func CensorError(err error) string {
 	}
 
 	return out
+}
+
+func BlockingAddRunningCommand(guildID int64, channelID int64, authorID int64, cmd *YAGCommand, timeout time.Duration) bool {
+	started := time.Now()
+	for {
+		if tryAddRunningCommand(guildID, channelID, authorID, cmd) {
+			return true
+		}
+
+		if time.Since(started) > timeout {
+			return false
+		}
+
+		if atomic.LoadInt32(shuttingDown) == 1 {
+			return false
+		}
+
+		time.Sleep(time.Second)
+
+		if atomic.LoadInt32(shuttingDown) == 1 {
+			return false
+		}
+	}
+}
+
+func tryAddRunningCommand(guildID int64, channelID int64, authorID int64, cmd *YAGCommand) bool {
+	runningcommandsLock.Lock()
+	for _, v := range runningCommands {
+		if v.GuildID == guildID && v.ChannelID == channelID && v.AuthorID == authorID && v.Command == cmd {
+			runningcommandsLock.Unlock()
+			return false
+		}
+	}
+
+	runningCommands = append(runningCommands, &RunningCommand{
+		GuildID:   guildID,
+		ChannelID: channelID,
+		AuthorID:  authorID,
+
+		Command: cmd,
+	})
+
+	runningcommandsLock.Unlock()
+
+	return true
+}
+
+func removeRunningCommand(guildID, channelID, authorID int64, cmd *YAGCommand) {
+	runningcommandsLock.Lock()
+	for i, v := range runningCommands {
+		if v.GuildID == guildID && v.ChannelID == channelID && v.AuthorID == authorID && v.Command == cmd {
+			runningCommands = append(runningCommands[:i], runningCommands[i+1:]...)
+			runningcommandsLock.Unlock()
+			return
+		}
+	}
+
+	runningcommandsLock.Unlock()
+
+	return
 }

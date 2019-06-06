@@ -3,20 +3,21 @@ package logs
 import (
 	"errors"
 	"fmt"
-	"github.com/jonas747/discordgo"
-	"github.com/jonas747/yagpdb/bot/botrest"
-	"github.com/jonas747/yagpdb/common"
-	"github.com/jonas747/yagpdb/logs/models"
-	"github.com/jonas747/yagpdb/web"
-	"github.com/sirupsen/logrus"
-	"github.com/volatiletech/null"
-	"github.com/volatiletech/sqlboiler/boil"
-	"goji.io"
-	"goji.io/pat"
 	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/jonas747/discordgo"
+	"github.com/jonas747/yagpdb/bot"
+	"github.com/jonas747/yagpdb/bot/botrest"
+	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/logs/models"
+	"github.com/jonas747/yagpdb/web"
+	"github.com/volatiletech/null"
+	"github.com/volatiletech/sqlboiler/boil"
+	"goji.io"
+	"goji.io/pat"
 )
 
 var AuthorColors = []string{
@@ -49,6 +50,11 @@ func (lp *Plugin) InitWeb() {
 		tmplPathSettings = "../../logs/assets/logs_control_panel.html"
 		tmplPathView = "../../logs/assets/logs_view.html"
 	}
+
+	web.AddSidebarItem(web.SidebarCategoryTools, &web.SidebarItem{
+		Name: "Logging",
+		URL:  "logging/",
+	})
 
 	web.Templates = template.Must(web.Templates.ParseFiles(tmplPathSettings, tmplPathView))
 
@@ -152,6 +158,10 @@ func HandleLogsCPSaveGeneral(w http.ResponseWriter, r *http.Request) (web.Templa
 	}
 
 	err := config.UpsertG(ctx, true, []string{"guild_id"}, boil.Infer(), boil.Infer())
+	if err == nil {
+		logger.Println("evicting")
+		bot.EvictGSCache(g.ID, CacheKeyConfig)
+	}
 	return tmpl, err
 }
 
@@ -242,7 +252,7 @@ func HandleLogsHTML(w http.ResponseWriter, r *http.Request) interface{} {
 	for k, v := range msgLogs.R.Messages {
 		parsed, err := discordgo.Timestamp(v.Timestamp.String).Parse()
 		if err != nil {
-			logrus.WithError(err).Error("Failed parsing logged message timestamp")
+			web.CtxLogger(r.Context()).WithError(err).Error("Failed parsing logged message timestamp")
 			continue
 		}
 		ts := parsed.UTC().Format(TimeFormat)

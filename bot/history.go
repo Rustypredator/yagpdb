@@ -1,10 +1,10 @@
 package bot
 
 import (
+	"sort"
+
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/common"
-	log "github.com/sirupsen/logrus"
-	"sort"
 )
 
 // GetMessages Gets messages from state if possible, if not then it retrieves from the discord api
@@ -66,7 +66,7 @@ func GetMessages(channelID int64, limit int, deleted bool) ([]*dstate.MessageSta
 			return nil, err
 		}
 
-		log.WithField("num_msgs", len(msgs)).Info("API history req finished")
+		logger.WithField("num_msgs", len(msgs)).Info("API history req finished")
 
 		if len(msgs) < 1 { // Nothing more
 			break

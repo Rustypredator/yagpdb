@@ -2,17 +2,17 @@ package automod
 
 import (
 	"context"
+	"time"
+
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/automod/models"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/scheduledevents2"
 	"github.com/jonas747/yagpdb/moderation"
-	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/null"
 	"github.com/volatiletech/sqlboiler/boil"
 	"github.com/volatiletech/sqlboiler/queries/qm"
-	"time"
 )
 
 type Effect interface {
@@ -240,7 +240,7 @@ func (vio *AddViolationEffect) Apply(ctxData *TriggeredRuleData, settings interf
 	newData.RecursionCounter++
 	go ctxData.Plugin.checkViolationTriggers(newData, settingsCast.Name)
 
-	logrus.Debug("Added violation to ", settingsCast.Name)
+	logger.Debug("Added violation to ", settingsCast.Name)
 
 	return err
 }
@@ -548,7 +548,7 @@ func (sn *SetNicknameEffect) Apply(ctxData *TriggeredRuleData, settings interfac
 		return nil
 	}
 
-	logrus.WithField("guild", ctxData.GS.ID).Info("automod: set nickname: ", settingsCast.NewName)
+	logger.WithField("guild", ctxData.GS.ID).Info("set nickname: ", settingsCast.NewName)
 	err := common.BotSession.GuildMemberNickname(ctxData.GS.ID, ctxData.MS.ID, settingsCast.NewName)
 	return err
 }

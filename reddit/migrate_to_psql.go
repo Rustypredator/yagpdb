@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/jonas747/retryableredis"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/reddit/models"
 	"github.com/mediocregopher/radix"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/sqlboiler/boil"
-	"strconv"
-	"strings"
 )
 
 // migrateLegacyRedisFormatToPostgres migrates all feeds from all servers to postgres from the old legacy redis format
@@ -29,21 +30,21 @@ func migrateLegacyRedisFormatToPostgres() {
 			split := strings.SplitN(key, ":", 2)
 			guildID, err := strconv.ParseInt(split[1], 10, 64)
 			if err != nil {
-				logrus.WithError(err).WithField("str", key).Error("reddit: failed migrating from redis, key is invalid")
+				logger.WithError(err).WithField("str", key).Error("reddit: failed migrating from redis, key is invalid")
 				continue
 			}
 
 			// perform the migration
 			err = migrateGuildConfig(guildID)
 			if err != nil {
-				logrus.WithError(err).WithField("str", key).Error("reddit: failed migrating from redis")
+				logger.WithError(err).WithField("str", key).Error("reddit: failed migrating from redis")
 				continue
 			}
-			logrus.Info("migrating reddit config for ", guildID)
+			logger.Info("migrating reddit config for ", guildID)
 		}
 
 		if err := scanner.Close(); err != nil {
-			logrus.WithError(err).Error("failed scanning keys while migrating reddit")
+			logger.WithError(err).Error("failed scanning keys while migrating reddit")
 			return err
 		}
 
@@ -89,7 +90,7 @@ func migrateGuildConfig(guildID int64) error {
 		return errors.Wrapf(err, "[%d].commit", guildID)
 	}
 
-	err = common.RedisPool.Do(radix.Cmd(nil, "RENAME", key, "backup_"+key))
+	err = common.RedisPool.Do(retryableredis.Cmd(nil, "RENAME", key, "backup_"+key))
 	if err != nil {
 		return errors.Wrapf(err, "[%d].rename", guildID)
 	}
@@ -123,8 +124,8 @@ func (item *LegacySubredditWatchItem) Set() error {
 	guild := item.Guild
 
 	err = common.RedisPool.Do(radix.Pipeline(
-		radix.FlatCmd(nil, "HSET", "guild_subreddit_watch:"+guild, item.ID, serialized),
-		radix.FlatCmd(nil, "HSET", "global_subreddit_watch:"+strings.ToLower(item.Sub), fmt.Sprintf("%s:%d", guild, item.ID), serialized),
+		retryableredis.FlatCmd(nil, "HSET", "guild_subreddit_watch:"+guild, item.ID, serialized),
+		retryableredis.FlatCmd(nil, "HSET", "global_subreddit_watch:"+strings.ToLower(item.Sub), fmt.Sprintf("%s:%d", guild, item.ID), serialized),
 	))
 
 	return err
@@ -134,15 +135,15 @@ func (item *LegacySubredditWatchItem) Remove() error {
 	guild := item.Guild
 
 	err := common.RedisPool.Do(radix.Pipeline(
-		radix.FlatCmd(nil, "HDEL", "guild_subreddit_watch:"+guild, item.ID),
-		radix.FlatCmd(nil, "HDEL", "global_subreddit_watch:"+strings.ToLower(item.Sub), fmt.Sprintf("%s:%d", guild, item.ID)),
+		retryableredis.FlatCmd(nil, "HDEL", "guild_subreddit_watch:"+guild, item.ID),
+		retryableredis.FlatCmd(nil, "HDEL", "global_subreddit_watch:"+strings.ToLower(item.Sub), fmt.Sprintf("%s:%d", guild, item.ID)),
 	))
 	return err
 }
 
 func GetLegacyConfig(key string) ([]*LegacySubredditWatchItem, error) {
 	var rawItems map[string]string
-	err := common.RedisPool.Do(radix.Cmd(&rawItems, "HGETALL", key))
+	err := common.RedisPool.Do(retryableredis.Cmd(&rawItems, "HGETALL", key))
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +165,7 @@ func GetLegacyConfig(key string) ([]*LegacySubredditWatchItem, error) {
 				Channel: "ERROR DECODING",
 				ID:      int(id),
 			}
-			logrus.WithError(err).Error("Failed decoding reddit watch item")
+			logger.WithError(err).Error("Failed decoding reddit watch item")
 		} else {
 			out[i] = decoded
 		}

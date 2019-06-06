@@ -2,26 +2,23 @@ package discordlogger
 
 import (
 	"fmt"
+
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/bot/eventsystem"
 	"github.com/jonas747/yagpdb/common"
-	"github.com/sirupsen/logrus"
-	"os"
-	"strconv"
+	"github.com/jonas747/yagpdb/common/config"
 )
 
 var (
 	// Send bot leaves joins to this disocrd channel
-	BotLeavesJoins int64
+	confBotLeavesJoins = config.RegisterOption("yagpdb.botleavesjoins", "Channel to log added/left servers to", 0)
+
+	logger = common.GetPluginLogger(&Plugin{})
 )
 
-func init() {
-	BotLeavesJoins, _ = strconv.ParseInt(os.Getenv("YAGPDB_BOTLEAVESJOINS"), 10, 64)
-}
-
 func Register() {
-	if BotLeavesJoins != 0 {
-		logrus.Info("Listening for bot leaves and join")
+	if confBotLeavesJoins.GetInt() != 0 {
+		logger.Info("Listening for bot leaves and join")
 		common.RegisterPlugin(&Plugin{})
 	}
 }
@@ -39,13 +36,13 @@ func (p *Plugin) PluginInfo() *common.PluginInfo {
 }
 
 func (p *Plugin) BotInit() {
-	eventsystem.AddHandler(EventHandler, eventsystem.EventNewGuild, eventsystem.EventGuildDelete)
+	eventsystem.AddHandlerAsyncLast(EventHandler, eventsystem.EventNewGuild, eventsystem.EventGuildDelete)
 }
 
 func EventHandler(evt *eventsystem.EventData) {
 	count, err := common.GetJoinedServerCount()
 	if err != nil {
-		logrus.WithError(err).Error("failed checking server count")
+		logger.WithError(err).Error("failed checking server count")
 	}
 
 	msg := ""
@@ -61,5 +58,5 @@ func EventHandler(evt *eventsystem.EventData) {
 	}
 
 	msg += fmt.Sprintf(" (now connected to %d servers)", count)
-	common.BotSession.ChannelMessageSend(BotLeavesJoins, common.EscapeSpecialMentions(msg))
+	common.BotSession.ChannelMessageSend(int64(confBotLeavesJoins.GetInt()), common.EscapeSpecialMentions(msg))
 }
